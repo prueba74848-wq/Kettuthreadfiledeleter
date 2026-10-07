@@ -7,7 +7,7 @@
       "id": "000000000000000000"
     }
   ],
-  "main": "KettuThreadFileDeleter.js",
+  "main": "index.js",
   "version": "1.0.0",
   "vendetta": {
     "icon": "ic_trash"
