@@ -1,280 +1,282 @@
 (function () {
-function require(id) {
-  switch (id) {
-    case "@vendetta": return vendetta;
-    case "@vendetta/metro": return vendetta.metro;
-    case "@vendetta/metro/common": return vendetta.metro.common;
-    case "@vendetta/ui/assets": return vendetta.ui.assets;
-    case "@vendetta/ui/toasts": return vendetta.ui.toasts;
-    case "@vendetta/ui/components": return vendetta.ui.components;
-    case "@vendetta/storage": return vendetta.storage;
-    case "@vendetta/plugin": return vendetta.plugin;
-    default: throw new Error("[ThreadFileDeleter] Unknown module: " + id);
+  'use strict';
+
+  const vd = window.vendetta;
+  const { findByProps, findByStoreName } = vd.metro;
+
+  const React = findByProps("createElement", "useState");
+  const RN = findByProps("View", "Text", "StyleSheet");
+  const { createElement: h, useState } = React;
+  const { View, Text, TextInput, ScrollView, Switch, StyleSheet, TouchableOpacity } = RN;
+
+  const HTTP = findByProps("put", "del", "patch", "post", "get", "getAPIBaseURL");
+  const FD = findByProps("_interceptors");
+  const ChannelStore = findByStoreName("ChannelStore");
+  const UserStore = findByStoreName("UserStore");
+  const ThemeStore = findByStoreName("ThemeStore");
+  const tokens = findByProps("unsafe_rawColors", "colors");
+
+  const { createStorage, wrapSync, createMMKVBackend } = vd.storage;
+  const storage = wrapSync(createStorage(createMMKVBackend("ThreadFileDeleter")));
+
+  // -------------------------------------------------------------------------
+  // Storage helpers
+  // -------------------------------------------------------------------------
+
+  function getBlacklist() {
+    if (!storage["blacklist"]) storage["blacklist"] = "";
+    return storage["blacklist"];
   }
-}
-var module = { exports: {} };
-var exports = module.exports;
-'use strict';
 
-Object.defineProperties(exports, { __esModule: { value: true }, [Symbol.toStringTag]: { value: 'Module' } });
-
-const metro = require('@vendetta/metro');
-const plugin = require('@vendetta/plugin');
-const _vendetta = require('@vendetta');
-const common = require('@vendetta/metro/common');
-const assets = require('@vendetta/ui/assets');
-const toasts = require('@vendetta/ui/toasts');
-const components = require('@vendetta/ui/components');
-const storage = require('@vendetta/storage');
-
-const { FormSection, FormInput, FormText, FormSwitchRow } = components.Forms;
-
-// ---------------------------------------------------------------------------
-// Settings UI
-// ---------------------------------------------------------------------------
-
-function Settings() {
-  storage.useProxy(plugin.storage);
-  const h = common.React.createElement;
-  return h(
-    FormSection,
-    { title: "Thread File Deleter", android_noDivider: true },
-    h(FormInput, {
-      title: "Blacklisted users",
-      placeholder: "User IDs or usernames separated by commas",
-      value: plugin.storage.blacklist,
-      onChange: (v) => (plugin.storage.blacklist = v)
-    }),
-    h(FormInput, {
-      title: "Thread channel ID",
-      placeholder: "Parent channel where user threads live",
-      value: plugin.storage.threadChannelId,
-      onChange: (v) => (plugin.storage.threadChannelId = v.trim())
-    }),
-    FormSwitchRow
-      ? h(FormSwitchRow, {
-          label: "Test mode (log but don't delete)",
-          value: !!plugin.storage.dryRun,
-          onValueChange: (v) => (plugin.storage.dryRun = v)
-        })
-      : null,
-    h(
-      FormText,
-      { style: { paddingHorizontal: 16, paddingBottom: 8 } },
-      "Deletes any message that contains a Google Drive link or a file attachment " +
-      "posted inside a thread whose name matches a blacklisted user's @username. " +
-      "The thread does NOT have to be owned by that user — only the name needs to match. " +
-      "Set Thread channel ID to the parent forum/channel where those threads live. " +
-      "You need Manage Messages permission in those threads. " +
-      "Enable Developer Mode, then long-press a user and tap Copy User ID."
-    )
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-const norm  = (s) => String(s != null ? s : "").toLowerCase();
-const clean = (s) => norm(s).replace(/[^a-z0-9\u00C0-\uFFFF]/g, "");
-const isId  = (s) => /^\d{15,25}$/.test(s);
-
-// Google Drive link patterns
-const GDRIVE_RE = /https?:\/\/(drive|docs)\.google\.com\/\S+/i;
-
-function getRest() {
-  return metro.findByProps("get", "post", "del", "patch");
-}
-
-function toast(text) {
-  try {
-    toasts.showToast(text, assets.getAssetIDByName("Small"));
-  } catch (e) {
-    _vendetta.logger.log("[ThreadFileDeleter] toast failed: " + String(e));
+  function getThreadChannelId() {
+    if (!storage["threadChannelId"]) storage["threadChannelId"] = "";
+    return storage["threadChannelId"];
   }
-}
 
-// Parse the comma/semicolon/newline-separated blacklist from storage
-function getEntries() {
-  return String(plugin.storage.blacklist != null ? plugin.storage.blacklist : "")
-    .split(/[,;\n]+/)
-    .map((s) => s.trim().replace(/^@/, ""))
-    .filter(Boolean);
-}
+  function isDryRun() {
+    return !!storage["dryRun"];
+  }
 
-// Build the set of cleaned names (from username entries + cached names for ID entries)
-function buildNameSet(entries) {
-  const names = new Set(
-    entries.filter((e) => !isId(e)).map(clean).filter((n) => n.length >= 2)
-  );
-  const ids = entries.filter(isId);
-  if (ids.length) {
+  // -------------------------------------------------------------------------
+  // Color helper (same pattern as autoreactor)
+  // -------------------------------------------------------------------------
+
+  function c(key, fallback) {
     try {
-      const UserStore = metro.findByProps("getUser", "getCurrentUser");
-      for (const id of ids) {
-        const u = UserStore && UserStore.getUser ? UserStore.getUser(id) : null;
-        if (u) {
-          [u.username, u.globalName, u.global_name]
-            .map(clean)
-            .filter((n) => n.length >= 3)
-            .forEach((n) => names.add(n));
-        }
+      const t = tokens;
+      const sc = t && t.colors && t.colors[key];
+      const resolve = t && t.internal && t.internal.resolveSemanticColor;
+      if (sc && resolve) {
+        const out = resolve(ThemeStore && ThemeStore.theme, sc);
+        if (typeof out === "string" && out) return out;
       }
-    } catch (e) {
-      _vendetta.logger.log("[ThreadFileDeleter] user lookup failed: " + String(e));
-    }
+    } catch (e) { /* fall through */ }
+    return fallback;
   }
-  return names;
-}
 
-// Returns true when the channel is a thread whose name matches a blacklisted user
-function isBlacklistedThread(ch) {
-  if (!ch) return false;
-  // Must be a thread type (10 = ANNOUNCEMENT_THREAD, 11 = PUBLIC_THREAD, 12 = PRIVATE_THREAD)
+  // -------------------------------------------------------------------------
+  // Matching helpers
+  // -------------------------------------------------------------------------
+
+  const norm  = function(s) { return String(s != null ? s : "").toLowerCase(); };
+  const clean = function(s) { return norm(s).replace(/[^a-z0-9\u00C0-\uFFFF]/g, ""); };
+  const isId  = function(s) { return /^\d{15,25}$/.test(s); };
+
+  const GDRIVE_RE = /https?:\/\/(drive|docs)\.google\.com\/\S+/i;
+
+  function getEntries() {
+    return String(getBlacklist())
+      .split(/[,;\n]+/)
+      .map(function(s) { return s.trim().replace(/^@/, ""); })
+      .filter(Boolean);
+  }
+
+  function buildNameSet(entries) {
+    const names = new Set(
+      entries.filter(function(e) { return !isId(e); }).map(clean).filter(function(n) { return n.length >= 2; })
+    );
+    const ids = entries.filter(isId);
+    if (ids.length) {
+      try {
+        for (let i = 0; i < ids.length; i++) {
+          const u = UserStore && UserStore.getUser && UserStore.getUser(ids[i]);
+          if (u) {
+            [u.username, u.globalName, u.global_name]
+              .map(clean)
+              .filter(function(n) { return n.length >= 3; })
+              .forEach(function(n) { names.add(n); });
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+    return names;
+  }
+
+  // Thread type constants
   const THREAD_TYPES = [10, 11, 12];
-  if (!THREAD_TYPES.includes(ch.type)) return false;
 
-  const channelFilter = plugin.storage.threadChannelId;
-  const parentId = ch.parent_id != null ? ch.parent_id : ch.parentId;
-  if (channelFilter && parentId !== channelFilter) return false;
+  // Cache channel results so we don't re-check on every message
+  const threadCache = new Map();
 
-  const entries = getEntries();
-  if (!entries.length) return false;
+  function isBlacklistedThread(channelId) {
+    if (threadCache.has(channelId)) return threadCache.get(channelId);
 
-  const names = buildNameSet(entries);
-  const threadName = clean(ch.name);
-  return !!(threadName && names.has(threadName));
-}
+    const ch = ChannelStore && ChannelStore.getChannel && ChannelStore.getChannel(channelId);
+    if (!ch) { threadCache.set(channelId, false); return false; }
 
-// Returns true when the message contains a Google Drive link or any file attachment
-function hasOffendingContent(msg) {
-  // File/image attachments
-  if (msg.attachments && msg.attachments.length > 0) return true;
-  // Embedded files (stickers, embeds with type "rich" are fine; type "video"/"image"/"article" count)
-  if (msg.embeds && msg.embeds.length > 0) {
-    for (const e of msg.embeds) {
-      if (e.type && e.type !== "rich") return true;
-      // A rich embed whose url is a Drive link still counts
-      if (e.url && GDRIVE_RE.test(e.url)) return true;
+    // Must be a thread
+    if (THREAD_TYPES.indexOf(ch.type) === -1) { threadCache.set(channelId, false); return false; }
+
+    // Must be under the configured parent channel (if set)
+    const parentFilter = getThreadChannelId();
+    const parentId = ch.parent_id != null ? ch.parent_id : ch.parentId;
+    if (parentFilter && parentId !== parentFilter) { threadCache.set(channelId, false); return false; }
+
+    const entries = getEntries();
+    if (!entries.length) { threadCache.set(channelId, false); return false; }
+
+    const names = buildNameSet(entries);
+    const threadName = clean(ch.name);
+    const result = !!(threadName && names.has(threadName));
+    threadCache.set(channelId, result);
+    return result;
+  }
+
+  function hasOffendingContent(msg) {
+    if (msg.attachments && msg.attachments.length > 0) return true;
+    if (msg.embeds && msg.embeds.length > 0) {
+      for (let i = 0; i < msg.embeds.length; i++) {
+        const e = msg.embeds[i];
+        if (e.type && e.type !== "rich") return true;
+        if (e.url && GDRIVE_RE.test(e.url)) return true;
+      }
+    }
+    if (msg.content && GDRIVE_RE.test(msg.content)) return true;
+    return false;
+  }
+
+  function getOffendingReason(msg) {
+    if (msg.attachments && msg.attachments.length > 0) return "attachment";
+    if (msg.content && GDRIVE_RE.test(msg.content)) return "Google Drive link";
+    return "embedded file";
+  }
+
+  // -------------------------------------------------------------------------
+  // REST delete
+  // -------------------------------------------------------------------------
+
+  function deleteMessage(channelId, messageId, reason) {
+    if (isDryRun()) {
+      console.log("[ThreadFileDeleter] TEST: would delete " + channelId + "/" + messageId + " (" + reason + ")");
+      return;
+    }
+    try {
+      HTTP.del({ url: "/channels/" + channelId + "/messages/" + messageId });
+      console.log("[ThreadFileDeleter] Deleted " + channelId + "/" + messageId + " (" + reason + ")");
+    } catch (e) {
+      console.log("[ThreadFileDeleter] Delete failed: " + String(e && (e.message || e)));
     }
   }
-  // Drive link in the message body
-  if (msg.content && GDRIVE_RE.test(msg.content)) return true;
-  return false;
-}
 
-// ---------------------------------------------------------------------------
-// Message handler
-// ---------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // Interceptor (same mechanism as autoreactor)
+  // -------------------------------------------------------------------------
 
-let threadCache = new Map(); // channelId -> bool (is blacklisted thread)
+  let interceptFn = null;
 
-function getChannelFromStore(channelId) {
-  try {
-    const ChannelStore = metro.findByProps("getChannel", "getMutableGuildChannelsForGuild");
-    return ChannelStore && ChannelStore.getChannel ? ChannelStore.getChannel(channelId) : null;
-  } catch (e) {
-    return null;
-  }
-}
+  // -------------------------------------------------------------------------
+  // Settings UI
+  // -------------------------------------------------------------------------
 
-function isCachedBlacklistedThread(channelId) {
-  if (threadCache.has(channelId)) return threadCache.get(channelId);
-  const ch = getChannelFromStore(channelId);
-  if (!ch) return false; // unknown channel, skip
-  const result = isBlacklistedThread(ch);
-  threadCache.set(channelId, result);
-  return result;
-}
+  const S = StyleSheet.create({
+    container: { flex: 1 },
+    content: { padding: 16, paddingBottom: 80 },
+    title: { fontSize: 20, fontWeight: "800", marginBottom: 4 },
+    subtitle: { fontSize: 13, lineHeight: 18, marginBottom: 20, opacity: 0.6 },
+    label: { fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5, opacity: 0.55, marginBottom: 6, marginTop: 14 },
+    input: { borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, borderWidth: 1, marginBottom: 2 },
+    hint: { fontSize: 12, opacity: 0.5, marginTop: 4, lineHeight: 16 },
+    row: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 18 },
+    rowLabel: { fontSize: 15, flex: 1 },
+  });
 
-async function deleteMessage(channelId, messageId, reason) {
-  const label = channelId + "/" + messageId;
-  if (plugin.storage.dryRun) {
-    _vendetta.logger.log("[ThreadFileDeleter] TEST: would delete " + label + " (" + reason + ")");
-    toast("Test mode: would delete message in thread");
-    return;
-  }
-  try {
-    await getRest().del({ url: "/channels/" + channelId + "/messages/" + messageId });
-    _vendetta.logger.log("[ThreadFileDeleter] Deleted " + label + " (" + reason + ")");
-    toast("Deleted message with " + reason);
-  } catch (e) {
-    const status = e && (e.status != null ? e.status : e.response && e.response.status);
-    _vendetta.logger.log(
-      "[ThreadFileDeleter] Delete failed (" + status + "): " +
-      String(e && (e.message || (e.body && e.body.message)))
+  function Settings() {
+    const [blacklist, setBlacklist]         = useState(getBlacklist);
+    const [threadChannelId, setThreadChannelId] = useState(getThreadChannelId);
+    const [dryRun, setDryRun]               = useState(isDryRun);
+
+    const inputStyle = [S.input, {
+      color: c("TEXT_NORMAL", "#fff"),
+      backgroundColor: c("INPUT_BACKGROUND", "#1e1f22"),
+      borderColor: c("BORDER_SUBTLE", "#3f4147"),
+    }];
+
+    function saveBlacklist(v) {
+      setBlacklist(v);
+      storage["blacklist"] = v;
+      threadCache.clear();
+    }
+    function saveThreadChannelId(v) {
+      setThreadChannelId(v);
+      storage["threadChannelId"] = v.trim();
+      threadCache.clear();
+    }
+    function saveDryRun(v) {
+      setDryRun(v);
+      storage["dryRun"] = v;
+    }
+
+    return h(ScrollView,
+      { style: [S.container, { backgroundColor: c("BACKGROUND_PRIMARY", "#313338") }], contentContainerStyle: S.content },
+
+      h(Text, { style: [S.title, { color: c("HEADER_PRIMARY", "#fff") }] }, "Thread File Deleter"),
+      h(Text, { style: [S.subtitle, { color: c("TEXT_MUTED", "#949ba4") }] },
+        "Deletes messages with Google Drive links or file attachments posted in threads named after blacklisted users."),
+
+      h(Text, { style: [S.label, { color: c("TEXT_NORMAL", "#dbdee1") }] }, "Blacklisted users"),
+      h(TextInput, {
+        style: inputStyle,
+        value: blacklist,
+        onChangeText: saveBlacklist,
+        placeholder: "User IDs or @usernames, comma separated",
+        placeholderTextColor: c("TEXT_MUTED", "#87898c"),
+        multiline: true,
+      }),
+      h(Text, { style: [S.hint, { color: c("TEXT_MUTED", "#949ba4") }] },
+        "e.g. cooluser, 123456789012345678. The thread just needs to be named after them — they don't have to own it."),
+
+      h(Text, { style: [S.label, { color: c("TEXT_NORMAL", "#dbdee1") }] }, "Thread channel ID"),
+      h(TextInput, {
+        style: inputStyle,
+        value: threadChannelId,
+        onChangeText: saveThreadChannelId,
+        placeholder: "Parent forum/channel ID",
+        placeholderTextColor: c("TEXT_MUTED", "#87898c"),
+        keyboardType: "numeric",
+      }),
+      h(Text, { style: [S.hint, { color: c("TEXT_MUTED", "#949ba4") }] },
+        "Only threads inside this channel are checked. Enable Developer Mode, long-press the channel → Copy Channel ID."),
+
+      h(View, { style: S.row },
+        h(Text, { style: [S.rowLabel, { color: c("TEXT_NORMAL", "#dbdee1") }] }, "Test mode (log, don't delete)"),
+        h(Switch, {
+          value: dryRun,
+          onValueChange: saveDryRun,
+          trackColor: { true: c("BRAND_500", "#5865f2"), false: c("BACKGROUND_TERTIARY", "#1e1f22") },
+        }),
+      ),
     );
-    toast(
-      status === 403
-        ? "Can't delete message, missing Manage Messages permission"
-        : "Failed to delete message"
-    );
   }
-}
 
-function onMessageCreate(ev) {
-  try {
-    const msg = ev && ev.message;
-    if (!msg || !msg.id) return;
+  // -------------------------------------------------------------------------
+  // Plugin export
+  // -------------------------------------------------------------------------
 
-    const channelId = (ev && ev.channelId) || msg.channel_id;
-    if (!channelId) return;
-
-    // Only act inside blacklisted-user threads
-    if (!isCachedBlacklistedThread(channelId)) return;
-
-    // Check content
-    if (!hasOffendingContent(msg)) return;
-
-    // Determine reason for the log / toast
-    let reason = "file/link";
-    if (msg.attachments && msg.attachments.length > 0) reason = "attachment";
-    else if (msg.content && GDRIVE_RE.test(msg.content)) reason = "Google Drive link";
-    else reason = "embedded file";
-
-    deleteMessage(channelId, msg.id, reason);
-  } catch (e) {
-    _vendetta.logger.log("[ThreadFileDeleter] handler error: " + String(e));
-  }
-}
-
-// When a thread is created or updated we should bust the cache for it
-function onChannelUpdate(ev) {
-  try {
-    const ch = ev && (ev.channel || ev.Channel);
-    if (ch && ch.id) threadCache.delete(ch.id);
-  } catch (e) { /* ignore */ }
-}
-
-// ---------------------------------------------------------------------------
-// Plugin lifecycle
-// ---------------------------------------------------------------------------
-
-const index = {
-  onLoad() {
-    if (plugin.storage.blacklist == null)       plugin.storage.blacklist = "";
-    if (plugin.storage.threadChannelId == null) plugin.storage.threadChannelId = "";
-    if (plugin.storage.dryRun == null)          plugin.storage.dryRun = false;
-
-    threadCache.clear();
-
-    common.FluxDispatcher.subscribe("MESSAGE_CREATE",  onMessageCreate);
-    common.FluxDispatcher.subscribe("CHANNEL_UPDATE",  onChannelUpdate);
-    common.FluxDispatcher.subscribe("CHANNEL_CREATE",  onChannelUpdate);
-
-    _vendetta.logger.log("[ThreadFileDeleter] Loaded.");
-    toast("Thread File Deleter: enabled");
-  },
-  onUnload() {
-    common.FluxDispatcher.unsubscribe("MESSAGE_CREATE", onMessageCreate);
-    common.FluxDispatcher.unsubscribe("CHANNEL_UPDATE", onChannelUpdate);
-    common.FluxDispatcher.unsubscribe("CHANNEL_CREATE", onChannelUpdate);
-    threadCache.clear();
-    _vendetta.logger.log("[ThreadFileDeleter] Unloaded.");
-  },
-  settings: Settings
-};
-
-exports.default = index;
-return module.exports;
+  return {
+    onLoad: function() {
+      threadCache.clear();
+      interceptFn = function(payload) {
+        if (payload.type !== "MESSAGE_CREATE" || payload.optimistic) return null;
+        const msg = payload.message;
+        if (!msg || !msg.id) return null;
+        const channelId = payload.channelId || msg.channel_id;
+        if (!channelId) return null;
+        if (!isBlacklistedThread(channelId)) return null;
+        if (!hasOffendingContent(msg)) return null;
+        deleteMessage(channelId, msg.id, getOffendingReason(msg));
+        return null;
+      };
+      FD._interceptors.push(interceptFn);
+      console.log("[ThreadFileDeleter] Loaded.");
+    },
+    onUnload: function() {
+      if (interceptFn) {
+        FD._interceptors = FD._interceptors.filter(function(f) { return f !== interceptFn; });
+        interceptFn = null;
+      }
+      threadCache.clear();
+      console.log("[ThreadFileDeleter] Unloaded.");
+    },
+    settings: Settings,
+  };
 })();
