@@ -1,0 +1,15 @@
+{
+  "name": "ThreadFileDeleter",
+  "description": "Deletes messages containing Google Drive links or file attachments posted in threads belonging to blacklisted users.",
+  "authors": [
+    {
+      "name": "you",
+      "id": "000000000000000000"
+    }
+  ],
+  "main": "KettuThreadFileDeleter.js",
+  "version": "1.0.0",
+  "vendetta": {
+    "icon": "ic_trash"
+  }
+}
