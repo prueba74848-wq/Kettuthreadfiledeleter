@@ -64,10 +64,13 @@ function Settings() {
 }
 
 const norm  = (s) => String(s != null ? s : "").toLowerCase();
-const clean = (s) => norm(s).replace(/[^a-z0-9\u00C0-\uFFFF]/g, "");
+const clean = (s) => norm(s).replace(/[^a-z0-9À-￿]/g, "");
 const isId  = (s) => /^\d{15,25}$/.test(s);
 
-const GDRIVE_RE = /https?:\/\/(drive|docs)\.google\.com\/\S+/i;
+// Matches bare or markdown-linked Google Drive / Docs URLs
+// Strips trailing punctuation like ) ] > that may close a markdown link
+const GDRIVE_RE = /https?:\/\/(drive|docs)\.google\.com\/[^\s\)\]>]*/i;
+
 const THREAD_TYPES = [10, 11, 12];
 
 function getRest() {
@@ -127,15 +130,33 @@ function isBlacklistedThread(ch) {
   return !!(threadName && names.has(threadName));
 }
 
+// Check a string (content, embed field, etc.) for a Drive link
+function hasDriveLink(str) {
+  return str != null && GDRIVE_RE.test(String(str));
+}
+
 function hasOffendingContent(msg) {
+  // File/image attachments
   if (msg.attachments && msg.attachments.length > 0) return "attachment";
+
+  // Check embeds — including rich embeds whose url/description contain a Drive link
   if (msg.embeds && msg.embeds.length > 0) {
     for (const e of msg.embeds) {
       if (e.type && e.type !== "rich") return "embedded file";
-      if (e.url && GDRIVE_RE.test(e.url)) return "Google Drive link";
+      if (hasDriveLink(e.url)) return "Google Drive link";
+      if (hasDriveLink(e.description)) return "Google Drive link";
+      if (e.title && hasDriveLink(e.title)) return "Google Drive link";
+      if (e.fields && e.fields.length > 0) {
+        for (const f of e.fields) {
+          if (hasDriveLink(f.value) || hasDriveLink(f.name)) return "Google Drive link";
+        }
+      }
     }
   }
-  if (msg.content && GDRIVE_RE.test(msg.content)) return "Google Drive link";
+
+  // Check message content — handles bare URLs and markdown [text](url) links
+  if (msg.content && hasDriveLink(msg.content)) return "Google Drive link";
+
   return null;
 }
 
